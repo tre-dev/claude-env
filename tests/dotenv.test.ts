@@ -16,6 +16,7 @@ import {
   mergeDotenv,
   projectPath,
   quote,
+  removeDotenv,
   splitAssignment,
   unquote,
   valuesOf,
@@ -155,6 +156,31 @@ describe('mergeDotenv', () => {
     expect(mergeDotenv('toString=abc\nA=1\n', { A: 'x' }).text).toBe('toString=abc\nA=x\n')
     expect(mergeDotenv('constructor=abc\n', { valueOf: 'v' }).text).toBe('constructor=abc\nvalueOf=v\n')
     expect(mergeDotenv('toString=old\n', { toString: 'new' }).text).toBe('toString=new\n')
+  })
+})
+
+describe('removeDotenv', () => {
+  test('drops the key line and keeps every other line', () => {
+    expect(removeDotenv('# head\nA=1 # note\nB=2\n', 'A')).toEqual({ text: '# head\nB=2\n', removed: true })
+  })
+  test('a missing key leaves the text as it was', () => {
+    expect(removeDotenv('A=1\n', 'B')).toEqual({ text: 'A=1\n', removed: false })
+  })
+  test('every line of a key set twice goes, so no earlier value takes over', () => {
+    expect(removeDotenv('A=1\nB=2\nexport A=3\n', 'A').text).toBe('B=2\n')
+  })
+  test('a value spanning lines goes whole', () => {
+    expect(removeDotenv('A="line1\nline2"\nB=2\n', 'A').text).toBe('B=2\n')
+  })
+  test('CRLF endings and a last line without one survive', () => {
+    expect(removeDotenv('A=1\r\nB=2\r\nC=3', 'B').text).toBe('A=1\r\nC=3')
+    expect(removeDotenv('A=1\r\nB=2', 'B').text).toBe('A=1')
+  })
+  test('the only key leaves an empty file', () => {
+    expect(removeDotenv('A=1\n', 'A').text).toBe('')
+  })
+  test('a comment naming the key is not a key line', () => {
+    expect(removeDotenv('# A=old\nA=1\n', 'A').text).toBe('# A=old\n')
   })
 })
 

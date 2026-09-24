@@ -43,7 +43,13 @@ you want both; neither needs the other.
 - **Rescan** re-reads the project. **Close** or Esc closes the pane.
 
 Below the buttons the pane lists the chosen file's keys, each masked or
-"(unfilled)", with a **Reveal** picker to show one or all. When a session
+"(unfilled)". Click a masked value (or Enter on it) to show it, again to hide
+it. **Reveal all values** shows every value after a Yes/No confirmation;
+**Hide all values** masks them again. **delete** beside a key asks "Delete
+KEY from FILE?" in place of the row and, on Yes, removes every line the key
+has in that file (a multi-line value whole; other lines, comments and line
+endings untouched). The focus lands on No, so a stray Enter changes nothing.
+A key the example names stays listed as unfilled after a delete. When a session
 starts with unfilled keys, a toast under the prompt reports how many, in how
 many files.
 
@@ -89,9 +95,9 @@ value also counts as a key, since every key the example lists is wanted.
   edit in the middle keeps the part before it and takes the rest as typed.
   The engine's Input is a one-line field and cuts a long value with `…` on
   screen; it is written whole.
-- The key list below the buttons shows only each value's length. The
-  **Reveal** picker shows one key's value or all of them; it resets when the
-  pane closes or another file is picked.
+- The key list below the buttons shows only each value's length until a
+  value is clicked or all are revealed; what is shown resets when the pane
+  closes or another file is picked.
 
 ## Requirements
 

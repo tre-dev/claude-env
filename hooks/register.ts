@@ -14,6 +14,7 @@ import {
   mask,
   mergeDotenv,
   projectPath,
+  removeDotenv,
   splitAssignment,
   targetOfExample,
   valuesOf,
@@ -89,8 +90,12 @@ type Site = {
   example: string | null
   /** Whether the target exists yet. */
   isPresent: boolean
-  /** The keys the example lists (or the target holds), with the value when set. */
-  keys: { key: string; value: string | undefined }[]
+  /**
+   * The keys the example lists (or the target holds), with the value when
+   * set, and whether the target has a line for the key at all (a placeholder
+   * counts): the lines Delete removes.
+   */
+  keys: { key: string; value: string | undefined; isInFile: boolean }[]
 }
 
 /** What the pane shows and holds between keystrokes. */
@@ -116,12 +121,20 @@ type Model = {
   note: string
   /** Whether the Secret field shows its text rather than one bullet per character. */
   showSecret: boolean
-  /** Which listed value is shown in clear: none (''), all (REVEAL_ALL) or one key. */
-  reveal: string
+  /** The listed keys whose value is shown in clear. */
+  shown: string[]
+  /**
+   * The press waiting for a Yes: '' for none, REVEAL_ALL, or the key a
+   * Delete was pressed on.
+   */
+  confirming: string
 }
 
-/** The Reveal picker's row for every value; never a key name, as a key has no space. */
-const REVEAL_ALL = 'all values'
+/** `confirming` for Reveal all; never a key name, as a key has no space. */
+const REVEAL_ALL = 'reveal all'
+
+/** The cells `[ Reveal all values ]` takes, the widest of its labels and of `Sure? [ Yes ] [ No ]`. */
+const REVEAL_COLUMNS = '[ Reveal all values ]'.length
 
 /**
  * The picker's row for a file that is not there yet. A site's target is a
@@ -131,7 +144,7 @@ const REVEAL_ALL = 'all values'
  */
 const NEW_FILE = '/new'
 
-let model: Model = { sites: [], target: '', isTyped: false, name: '', secret: '', epoch: 0, note: '', showSecret: false, reveal: '' }
+let model: Model = { sites: [], target: '', isTyped: false, name: '', secret: '', epoch: 0, note: '', showSecret: false, shown: [], confirming: '' }
 
 const nameKey = (epoch: number) => `name:${epoch}`
 
@@ -182,7 +195,7 @@ export function register(on: On) {
     const result = await next(e)
 
     if (result.deny === undefined) {
-      model = { ...model, secret: '', epoch: model.epoch + 1, showSecret: false, reveal: '' }
+      model = { ...model, secret: '', epoch: model.epoch + 1, showSecret: false, shown: [], confirming: '' }
     }
 
     return result
@@ -247,7 +260,7 @@ function paneView(engine: Host, ui: Ui, columns: number): RenderElement {
     onSelect: (value: string) => {
       const isTyped = value === NEW_FILE
 
-      model = { ...model, target: isTyped ? '.env' : value, isTyped, name: '', epoch: model.epoch + 1, note: '', reveal: '' }
+      model = { ...model, target: isTyped ? '.env' : value, isTyped, name: '', epoch: model.epoch + 1, note: '', shown: [], confirming: '' }
       engine.invalidate()
     },
   })
@@ -354,23 +367,7 @@ function paneView(engine: Host, ui: Ui, columns: number): RenderElement {
       model.note === '' ? null : Box({ height: 1 }),
       model.note === '' ? null : line(model.note),
       Box({ height: 1 }),
-      site && site.keys.some(k => k.value !== undefined)
-        ? Select({
-            key: 'reveal',
-            label: 'Reveal ',
-            options: [
-              { value: '', label: 'nothing' },
-              { value: REVEAL_ALL, label: REVEAL_ALL },
-              ...site.keys.filter(k => k.value !== undefined).map(k => ({ value: k.key, label: k.key })),
-            ],
-            value: model.reveal,
-            onSelect: (value: string) => {
-              model = { ...model, reveal: value }
-              engine.invalidate()
-            },
-          })
-        : null,
-      ...keysLines(site).map(text => line(text, true)),
+      ...keyList(engine, ui, site),
     ],
   })
 }
@@ -407,34 +404,131 @@ function siteLabel(site: Site): string {
   return `${site.target}  (${state}${site.example ? '' : ', no example'})`
 }
 
-/** The key list: a heading, then one aligned row per key. */
-function keysLines(site: Site | undefined): string[] {
+/**
+ * The key list: a heading, then one row per key. A value is masked until its
+ * row is pressed; Delete and Reveal all each ask for a Yes first, in place of
+ * the row or the button they were pressed on.
+ */
+function keyList(engine: Host, ui: Ui, site: Site | undefined): RenderElement[] {
+  const { Box, Text, Button } = ui
+  const dim = (text: string) => Text({ dimColor: true, wrap: 'wrap', children: text })
+
   if (model.isTyped) {
-    return [`A new file at ${model.target.trim() || '.env'}: Save creates it with the first variable.`]
+    return [dim(`A new file at ${model.target.trim() || '.env'}: Save creates it with the first variable.`)]
   }
 
   if (!site) {
-    return ['No .env or .env.example found below this directory. Pick "new file…" to create one.']
+    return [dim('No .env or .env.example found below this directory. Pick "new file…" to create one.')]
   }
 
   if (site.keys.length === 0) {
-    return [`${site.target}: no keys yet.`]
+    return [dim(`${site.target}: no keys yet.`)]
   }
 
+  const filled = site.keys.filter(k => k.value !== undefined).map(k => k.key)
+  const isAllShown = filled.length > 0 && filled.every(k => model.shown.includes(k))
   const width = Math.max(...site.keys.map(k => k.key.length))
+
+  const confirm = (question: string, id: string, onYes: () => void) =>
+    Box({
+      flexDirection: 'row',
+      gap: 1,
+      children: [
+        Text({ children: question }),
+        Button({ key: `yes:${id}`, label: 'Yes', onPress: onYes }),
+        Button({ key: `no:${id}`, label: 'No', onPress: () => ask(engine, '') }),
+      ],
+    })
+
+  // The button and the question that stands in for it take the same cells,
+  // so the list below does not move when one replaces the other.
+  const revealAll =
+    filled.length === 0
+      ? null
+      : model.confirming === REVEAL_ALL
+        ? confirm('Sure?', 'all', () => {
+            model = { ...model, shown: filled, confirming: '' }
+            engine.invalidate()
+          })
+        : Button({
+            key: 'all',
+            label: isAllShown ? 'Hide all values' : 'Reveal all values',
+            onPress: () => {
+              if (isAllShown) {
+                model = { ...model, shown: [] }
+                engine.invalidate()
+              } else {
+                ask(engine, REVEAL_ALL)
+              }
+            },
+          })
+
   // The File row above already names the file; only where the key names
   // come from is worth a line, and only when that is another file.
-  const heading = site.example === null ? [] : [`keys from ${site.example}`]
+  const heading = site.example === null ? [] : [dim(`keys from ${site.example}`)]
 
-  const shown = (k: { key: string; value: string | undefined }) => {
-    if (k.value === undefined) {
-      return '(unfilled)'
+  const rows = site.keys.map(k => {
+    if (model.confirming === k.key) {
+      const unlisted = site.example === null ? '' : ` It stays listed, unfilled, as ${site.example} names it.`
+
+      return confirm(`  Delete ${k.key} from ${site.target}?`, k.key, () => {
+        void remove(engine, k.key, unlisted).catch(error => fail(engine, error))
+      })
     }
 
-    return model.reveal === REVEAL_ALL || model.reveal === k.key ? k.value : mask(k.value)
-  }
+    const isShown = model.shown.includes(k.key)
+    const value =
+      k.value === undefined
+        ? Text({ dimColor: true, children: '(unfilled)' })
+        : Button({
+            key: `show:${k.key}`,
+            plain: true,
+            dimColor: !isShown,
+            // A Button's label is one line, so a multi-line value (a PEM key)
+            // is drawn on one. A short value is padded to its mask's width,
+            // so revealing it never pulls the delete button in.
+            label: isShown ? k.value.replace(/\r?\n/g, '⏎').padEnd(mask(k.value).length) : mask(k.value),
+            onPress: () => {
+              model = { ...model, shown: isShown ? model.shown.filter(s => s !== k.key) : [...model.shown, k.key] }
+              engine.invalidate()
+            },
+          })
 
-  return [...heading, ...site.keys.map(k => `  ${k.key.padEnd(width)}  ${shown(k)}`)]
+    return Box({
+      flexDirection: 'row',
+      gap: 1,
+      children: [
+        Text({ children: `  ${k.key.padEnd(width)}` }),
+        value,
+        k.isInFile
+          ? Button({ key: `del:${k.key}`, plain: true, dimColor: true, label: 'delete', onPress: () => ask(engine, k.key) })
+          : null,
+      ],
+    })
+  })
+
+  return [
+    ...(revealAll ? [Box({ width: REVEAL_COLUMNS, children: [revealAll] }), Box({ height: 1 })] : []),
+    ...heading,
+    ...rows,
+  ]
+}
+
+/**
+ * Puts a press up for confirmation, or cancels it with ''. The focus goes to
+ * No, so an Enter pressed out of habit changes nothing; on a cancel it goes
+ * to Name, as the button it was on is gone.
+ */
+function ask(engine: Host, confirming: string): void {
+  const id = confirming === REVEAL_ALL ? 'all' : confirming
+
+  model = { ...model, confirming }
+  engine.invalidate()
+
+  void engine
+    .sleep(FRAME_MS)
+    .then(() => engine.focus(confirming === '' ? nameKey(model.epoch) : `no:${id}`))
+    .catch(() => undefined)
 }
 
 /** What the Secret field's text means: itself when shown, an edit of the bullets when hidden. */
@@ -547,6 +641,49 @@ async function save(engine: Host): Promise<void> {
   // that mounts them, as a focus call before it names nothing.
   await engine.sleep(FRAME_MS).catch(() => undefined)
   await engine.focus(nameKey(epoch)).catch(() => undefined)
+}
+
+/**
+ * Deletes a key's lines from the chosen file, after the Yes. Shares the
+ * save's guard, as it reads and writes the same file across the same awaits.
+ */
+async function remove(engine: Host, key: string, unlisted: string): Promise<void> {
+  if (isSaving) {
+    return
+  }
+
+  const target = model.target
+  let removed: boolean
+
+  isSaving = true
+
+  try {
+    // `exists` before `read`, as in `save`: a failed read must not pass for
+    // an empty file.
+    const current = (await engine.exists(target)) ? await engine.read(target) : ''
+    const out = removeDotenv(current, key)
+
+    removed = out.removed
+
+    if (removed) {
+      await engine.write(target, out.text)
+    }
+
+    await refresh(engine)
+  } finally {
+    isSaving = false
+  }
+
+  model = {
+    ...model,
+    shown: model.shown.filter(k => k !== key),
+    confirming: '',
+    note: removed ? `Deleted ${key} from ${target}.${unlisted}` : `${key} is no longer in ${target}.`,
+  }
+  engine.invalidate()
+
+  await engine.sleep(FRAME_MS).catch(() => undefined)
+  await engine.focus(nameKey(model.epoch)).catch(() => undefined)
 }
 
 async function pasteClipboard(engine: Host): Promise<void> {
@@ -662,7 +799,7 @@ async function siteOf(engine: Host, target: string, example: string | null): Pro
   const keys = names.map(key => {
     const value = have[key]
 
-    return { key, value: value === undefined || isMarker(value) ? undefined : value }
+    return { key, value: value === undefined || isMarker(value) ? undefined : value, isInFile: value !== undefined }
   })
 
   return { target, example, isPresent: text !== null, keys }

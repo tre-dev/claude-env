@@ -323,6 +323,35 @@ export function mergeDotenv(text: string, fills: Record<string, string>): Merge 
   return { text: merged, replaced, appended }
 }
 
+/**
+ * Drops every line a key has in a dotenv text, a multi-line value whole.
+ * Every one, as a loader keeps the last: removing only one would leave an
+ * earlier value to take its place. Other lines are left byte for byte, line
+ * endings and comments included.
+ */
+export function removeDotenv(text: string, key: string): { text: string; removed: boolean } {
+  const lines = text.split('\n')
+  const dropped = new Set<number>()
+
+  for (const row of rowsOf(lines)) {
+    if (row.key === key) {
+      for (let i = row.start; i <= row.end; i++) {
+        dropped.add(i)
+      }
+    }
+  }
+
+  const kept = lines.filter((_, i) => !dropped.has(i))
+
+  // A file that ended without a newline on the dropped line ends without one
+  // still: the line now last loses the '\r' its CRLF separator left on it.
+  if (dropped.has(lines.length - 1) && kept.length > 0) {
+    kept[kept.length - 1] = dropCr(kept[kept.length - 1] as string)
+  }
+
+  return { text: kept.join('\n'), removed: dropped.size > 0 }
+}
+
 // What the scanner calls a values file has to be exactly what the guard
 // denies: a name the pane would write secrets into and the guard would let
 // the model read is the one bug this file cannot afford. So the name grammar
