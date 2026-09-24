@@ -1,0 +1,6 @@
+{
+  "description": "/env: a pane listing the project's .env files, with secret entry into the chosen one, and a guard that denies direct tool reads of them",
+  "modules": [
+    "./register.ts"
+  ]
+}

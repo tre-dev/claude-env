@@ -1,0 +1,8 @@
+{
+  "name": "claude-env",
+  "version": "0.1.0",
+  "description": "/env: every .env of the project in a pane inside Claude Code; enter secrets there without them entering the transcript.",
+  "author": {
+    "name": "Timo Reichert"
+  }
+}
